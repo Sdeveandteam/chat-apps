@@ -12,7 +12,7 @@
   #authScreen h1{ font-size:18px; margin-top:0; }
   #authScreen input{ width:100%; padding:10px; margin:6px 0; border-radius:6px; border:1px solid #2a3942; background:#2a3942; color:#e9edef; }
   #authScreen button{ width:100%; padding:10px; margin-top:10px; border:none; border-radius:6px; background:#00a884; color:#fff; font-weight:600; cursor:pointer; }
-  #authScreen .switch-link{ text-align:center; margin-top:12px; font-size:13px; color:#8696a0; cursor:pointer; }
+  #authScreen.switch-link{ text-align:center; margin-top:12px; font-size:13px; color:#8696a0; cursor:pointer; }
   #authError{ color:#f15c6d; font-size:12.5px; min-height:16px; }
 
   #app{ display:none; width:100%; height:100%; }
@@ -23,24 +23,25 @@
   #addContact input{ flex:1; padding:8px; border-radius:6px; border:1px solid #2a3942; background:#2a3942; color:#e9edef; }
   #addContact button{ padding:8px 12px; border:none; border-radius:6px; background:#00a884; color:#fff; cursor:pointer; }
   #contactList{ flex:1; overflow-y:auto; }
-  .contact-item{ padding:12px 14px; cursor:pointer; border-bottom:1px solid #202c33; }
-  .contact-item:hover, .contact-item.active{ background:#202c33; }
+ .contact-item{ padding:12px 14px; cursor:pointer; border-bottom:1px solid #202c33; }
+ .contact-item:hover,.contact-item.active{ background:#202c33; }
 
   #chatArea{ flex:1; display:flex; flex-direction:column; min-width:0; }
   #chatHeader{ padding:14px; background:#202c33; font-weight:600; }
   #messages{ flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; background:#0b141a; min-height:0; }
-  .bubble{ max-width:65%; padding:8px 12px; border-radius:8px; font-size:14px; line-height:1.4; }
-  .bubble.me{ align-self:flex-end; background:#005c4b; }
-  .bubble.them{ align-self:flex-start; background:#202c33; }
-  .bubble .time{ display:block; font-size:10px; opacity:0.6; margin-top:3px; }
+ .bubble{ max-width:65%; padding:8px 12px; border-radius:8px; font-size:14px; line-height:1.4; word-break:break-word; }
+ .bubble.me{ align-self:flex-end; background:#005c4b; }
+ .bubble.them{ align-self:flex-start; background:#202c33; }
+ .bubble.time{ display:block; font-size:10px; opacity:0.6; margin-top:3px; }
   #composer{ display:flex; padding:10px; gap:8px; background:#202c33; flex-shrink:0; }
   #composer input{ flex:1; padding:12px; border-radius:20px; border:none; background:#2a3942; color:#e9edef; min-width:0; }
   #composer button{ padding:0 18px; border:none; border-radius:20px; background:#00a884; color:#fff; cursor:pointer; flex-shrink:0; }
   #emptyChat{ margin:auto; color:#8696a0; text-align:center; }
+ .loading{ margin:auto; color:#8696a0; }
 
   @media (max-width: 640px){
     #sidebar{ width:130px; }
-    .contact-item{ padding:12px 8px; font-size:13px; word-break:break-all; }
+   .contact-item{ padding:12px 8px; font-size:13px; word-break:break-all; }
     #addContact{ padding:8px; }
     #addContact input{ font-size:12px; padding:6px; }
   }
@@ -81,14 +82,10 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-// ====== GANTI INI kalau backend & frontend beda domain ======
 const API_BASE = '';
-// ==============================================================
 
-/* ---------- CRYPTO (E2EE) ---------- */
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-
 function bufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function b64ToBuf(b64){ return Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
 
@@ -117,13 +114,14 @@ async function encryptText(aesKey, plaintext){
   return { ciphertext: bufToB64(ct), iv: bufToB64(iv) };
 }
 async function decryptText(aesKey, ciphertextB64, ivB64){
-  const ct = b64ToBuf(ciphertextB64);
-  const iv = b64ToBuf(ivB64);
-  const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ct);
-  return dec.decode(pt);
+  try {
+    const ct = b64ToBuf(ciphertextB64);
+    const iv = b64ToBuf(ivB64);
+    const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ct);
+    return dec.decode(pt);
+  } catch { return '[Pesan tidak bisa didekripsi]'; }
 }
 
-/* ---------- PENYIMPANAN KUNCI PRIVAT (IndexedDB, tidak pernah ke server) ---------- */
 function idbOpen(){
   return new Promise((resolve, reject)=>{
     const req = indexedDB.open('e2ee-store', 1);
@@ -151,13 +149,11 @@ async function idbGet(key){
   });
 }
 
-/* ---------- STATE ---------- */
 let token = null, me = null, myKeyPair = null, socket = null;
 let contacts = [];
 let activeContact = null;
 let isRegisterMode = false;
 
-/* ---------- AUTH UI ---------- */
 const authUsername = document.getElementById('authUsername');
 const authPassword = document.getElementById('authPassword');
 const authError = document.getElementById('authError');
@@ -166,10 +162,10 @@ const authTitle = document.getElementById('authTitle');
 const authSwitch = document.getElementById('authSwitch');
 
 authSwitch.addEventListener('click', ()=>{
-  isRegisterMode = !isRegisterMode;
-  authTitle.textContent = isRegisterMode ? 'Daftar akun baru' : 'Masuk ke Chat E2EE';
-  authSubmit.textContent = isRegisterMode ? 'Daftar' : 'Masuk';
-  authSwitch.textContent = isRegisterMode ? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar';
+  isRegisterMode =!isRegisterMode;
+  authTitle.textContent = isRegisterMode? 'Daftar akun baru' : 'Masuk ke Chat E2EE';
+  authSubmit.textContent = isRegisterMode? 'Daftar' : 'Masuk';
+  authSwitch.textContent = isRegisterMode? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar';
   authError.textContent = '';
 });
 
@@ -177,7 +173,7 @@ authSubmit.addEventListener('click', async ()=>{
   const username = authUsername.value.trim();
   const password = authPassword.value;
   authError.textContent = '';
-  if(!username || !password){ authError.textContent = 'Isi username dan password.'; return; }
+  if(!username ||!password){ authError.textContent = 'Isi username dan password.'; return; }
 
   try{
     if(isRegisterMode){
@@ -201,7 +197,7 @@ authSubmit.addEventListener('click', async ()=>{
       token = data.token; me = data.user;
       const savedPriv = await idbGet(`privkey:${username.toLowerCase()}`);
       if(!savedPriv){
-        authError.textContent = 'Kunci privat tidak ditemukan di device ini — akun ini terdaftar dari device/browser lain. Untuk demo, daftar akun baru di device ini.';
+        authError.textContent = 'Kunci privat tidak ditemukan di device ini. Daftar akun baru di device ini.';
         return;
       }
       myKeyPair = { privateKey: savedPriv };
@@ -212,7 +208,6 @@ authSubmit.addEventListener('click', async ()=>{
   }
 });
 
-/* ---------- APP ---------- */
 function startApp(){
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('app').classList.add('active');
@@ -275,31 +270,43 @@ function renderContacts(){
   list.innerHTML = '';
   contacts.forEach(c => {
     const el = document.createElement('div');
-    el.className = 'contact-item' + (activeContact && activeContact.id === c.id ? ' active' : '');
+    el.className = 'contact-item' + (activeContact && activeContact.id === c.id? ' active' : '');
     el.textContent = '@' + c.username;
     el.addEventListener('click', () => selectContact(c));
     list.appendChild(el);
   });
 }
 
+// INI FUNGSI YG UDAH DI FIX TOTAL
 async function selectContact(contact){
   activeContact = contact;
   renderContacts();
   document.getElementById('chatHeader').style.display = 'block';
   document.getElementById('chatHeader').textContent = '@' + contact.username;
-  document.getElementById('composer').style.display = 'flex';
+  document.getElementById('composer').style.display = 'flex'; // TAMPILIN DULUAN
 
-  const res = await fetch(`${API_BASE}/api/messages/${contact.id}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  const rows = await res.json();
   const messagesEl = document.getElementById('messages');
-  messagesEl.innerHTML = '';
-  for(const row of rows){
-    try{
-      const plain = await decryptText(contact.aesKey, row.ciphertext, row.iv);
-      appendBubble(plain, row.sender_id === me.id, row.created_at);
-    }catch{ /* lewati pesan yang gagal didekripsi */ }
+  messagesEl.innerHTML = '<div class="loading">Loading pesan...</div>';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/messages/${contact.id}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if(!res.ok) throw new Error('Gagal load: ' + res.status);
+
+    const rows = await res.json();
+    messagesEl.innerHTML = '';
+    if(rows.length === 0){
+      messagesEl.innerHTML = '<div id="emptyChat">Belum ada pesan. Sapa duluan!</div>';
+    } else {
+      for(const row of rows){
+        const plain = await decryptText(contact.aesKey, row.ciphertext, row.iv);
+        appendBubble(plain, row.sender_id === me.id, row.created_at);
+      }
+    }
+  } catch(err) {
+    console.error(err);
+    messagesEl.innerHTML = `<div id="emptyChat" style="color:#f15c6d;">${err.message}</div>`;
   }
 }
 
@@ -308,7 +315,7 @@ function appendBubble(text, isMe, createdAt){
   const empty = document.getElementById('emptyChat');
   if(empty) empty.remove();
   const div = document.createElement('div');
-  div.className = 'bubble ' + (isMe ? 'me' : 'them');
+  div.className = 'bubble ' + (isMe? 'me' : 'them');
   const time = new Date(createdAt || Date.now()).toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' });
   div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
   messagesEl.appendChild(div);
@@ -321,7 +328,7 @@ function escapeHtml(s){
 async function sendMessage(){
   const input = document.getElementById('messageInput');
   const text = input.value.trim();
-  if(!text || !activeContact) return;
+  if(!text ||!activeContact) return;
   input.value = '';
 
   const { ciphertext, iv } = await encryptText(activeContact.aesKey, text);
@@ -333,10 +340,10 @@ async function handleIncoming(payload){
   const fromId = payload.fromUserId;
   const contact = contacts.find(c => c.id === fromId);
   if(!contact) return;
-  if(!activeContact || activeContact.id !== fromId) return;
+  if(!activeContact || activeContact.id!== fromId) return;
   const plain = await decryptText(contact.aesKey, payload.ciphertext, payload.iv);
   appendBubble(plain, payload.fromUserId === me.id, payload.createdAt);
 }
 </script>
 </body>
-     </html>
+ </html>
