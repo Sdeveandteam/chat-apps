@@ -58,6 +58,7 @@
       <input id="contactInput" placeholder="Cari username...">
       <button id="addContactBtn">+</button>
     </div>
+    <div id="contactStatus" style="padding:0 14px 8px; font-size:12.5px; color:#f15c6d; min-height:16px;"></div>
     <div id="contactList"></div>
   </div>
   <div id="chatArea">
@@ -222,25 +223,43 @@ function startApp(){
 
 async function addContact(){
   const input = document.getElementById('contactInput');
+  const statusEl = document.getElementById('contactStatus');
   const username = input.value.trim().toLowerCase();
+  statusEl.textContent = '';
+  statusEl.style.color = '#f15c6d';
+
   if(!username) return;
-  if(username === me.username){ alert('Tidak bisa chat dengan diri sendiri.'); return; }
+  if(username === me.username){ statusEl.textContent = 'Tidak bisa chat dengan diri sendiri.'; return; }
 
-  const res = await fetch(`${API_BASE}/api/users/${username}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  const data = await res.json();
-  if(!res.ok){ alert(data.error || 'User tidak ditemukan'); return; }
+  try{
+    const res = await fetch(`${API_BASE}/api/users/${username}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if(!res.ok){
+      statusEl.textContent = (data.error || 'User tidak ditemukan') + ` (status ${res.status})`;
+      return;
+    }
 
-  if(contacts.find(c => c.id === data.id)){ input.value=''; return; }
+    if(contacts.find(c => c.id === data.id)){
+      statusEl.style.color = '#8696a0';
+      statusEl.textContent = 'Kontak sudah ada di daftar.';
+      input.value='';
+      return;
+    }
 
-  const publicKey = await importPublicKeyJWK(data.public_key);
-  const aesKey = await deriveSharedAesKey(myKeyPair.privateKey, publicKey);
-  const contact = { id: data.id, username: data.username, aesKey };
-  contacts.push(contact);
-  input.value = '';
-  renderContacts();
-  selectContact(contact);
+    const publicKey = await importPublicKeyJWK(data.public_key);
+    const aesKey = await deriveSharedAesKey(myKeyPair.privateKey, publicKey);
+    const contact = { id: data.id, username: data.username, aesKey };
+    contacts.push(contact);
+    input.value = '';
+    statusEl.textContent = '';
+    renderContacts();
+    selectContact(contact);
+  }catch(err){
+    statusEl.textContent = 'Gagal menghubungi server: ' + err.message;
+    console.error('addContact error:', err);
+  }
 }
 
 function renderContacts(){
@@ -312,4 +331,4 @@ async function handleIncoming(payload){
 }
 </script>
 </body>
-</html>
+       </html>
