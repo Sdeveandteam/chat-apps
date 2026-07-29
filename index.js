@@ -4,6 +4,7 @@ const http = require('http');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 const { Server } = require('socket.io');
 const { pool, initSchema } = require('./db');
 
@@ -14,6 +15,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+
+// Paksa load chat.html biar ga cache
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'chat.html'));
+});
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
@@ -26,32 +32,44 @@ function authMiddleware(req, res, next) {
   catch { res.status(401).json({ error: 'Token tidak valid' }); }
 }
 
+// REGISTER: bisa pake email atau phone
 app.post('/api/register', async (req, res) => {
-  const { username, password, publicKey } = req.body;
-  if (!username ||!password ||!publicKey) return res.status(400).json({ error: 'username, password, dan publicKey wajib diisi' });
+  const { username, password, publicKey, email, phone } = req.body;
+  if (!username ||!password ||!publicKey) return res.status(400).json({ error: 'username, password, dan publicKey wajib' });
+  if (!email &&!phone) return res.status(400).json({ error: 'email atau no hp wajib diisi 1' });
   if (password.length < 6) return res.status(400).json({ error: 'Password minimal 6 karakter' });
+
   try {
     const hash = await bcrypt.hash(password, 10);
-    const result = await pool.query('INSERT INTO users (username, password_hash, public_key) VALUES ($1,$2,$3) RETURNING id, username', [username.trim().toLowerCase(), hash, publicKey]);
+    const result = await pool.query(
+      'INSERT INTO users (username, email, phone, password_hash, public_key) VALUES ($1,$2,$3,$4,$5) RETURNING id, username, email, phone',
+      [username.trim().toLowerCase(), email?.trim().toLowerCase() || null, phone?.trim() || null, hash, publicKey]
+    );
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user });
-  } catch (err) { if (err.code === '23505') return res.status(409).json({ error: 'Username sudah dipakai' }); console.error(err); res.status(500).json({ error: 'Gagal mendaftar' }); }
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Username/Email/No HP sudah dipakai' });
+    console.error(err);
+    res.status(500).json({ error: 'Gagal mendaftar' });
+  }
 });
 
+// LOGIN: bisa pake username / email / phone
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { identifier, password } = req.body; // identifier
+  if(!identifier ||!password) return res.status(400).json({ error: 'Lengkapi semua' });
   try {
-    const result = await pool.query('SELECT * FROM users WHERE username=$1', [username.trim().toLowerCase()]);
-    const user = result.rows[0]; if (!user) return res.status(401).json({ error: 'Username atau password salah' });
-    const ok = await bcrypt.compare(password, user.password_hash); if (!ok) return res.status(401).json({ error: 'Username atau password salah' });
+    const result = await pool.query('SELECT * FROM users WHERE username=$1 OR email=$1 OR phone=$1', [identifier.trim().toLowerCase()]);
+    const user = result.rows[0]; if (!user) return res.status(401).json({ error: 'User tidak ditemukan' });
+    const ok = await bcrypt.compare(password, user.password_hash); if (!ok) return res.status(401).json({ error: 'Password salah' });
     const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, user: { id: user.id, username: user.username }, publicKey: user.public_key });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Gagal login' }); }
 });
 
 app.get('/api/users/:username', authMiddleware, async (req, res) => {
-  try { const result = await pool.query('SELECT id, username, public_key FROM users WHERE username=$1', [req.params.username.trim().toLowerCase()]); if (!result.rows[0]) return res.status(404).json({ error: 'User tidak ditemukan' }); res.json(result.rows[0]); }
+  try { const result = await pool.query('SELECT id, username, email, phone, public_key FROM users WHERE username=$1', [req.params.username.trim().toLowerCase()]); if (!result.rows[0]) return res.status(404).json({ error: 'User tidak ditemukan' }); res.json(result.rows[0]); }
   catch(err) { console.error(err); res.status(500).json({ error: 'Gagal cari user' }); }
 });
 
