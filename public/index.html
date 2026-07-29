@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Chat E2E</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:sans-serif;background:#111;color:#eee;margin:0}
+#auth,#app{padding:20px;max-width:400px;margin:auto}
+input,button{display:block;width:100%;margin:10px 0;padding:10px;border-radius:8px;border:0}
+button{background:#25D366;color:#fff;font-weight:bold}
+#chat{height:400px;overflow-y:auto;background:#222;padding:10px;border-radius:8px}
+.msg{background:#25D366;color:#000;padding:8px;border-radius:8px;margin:5px 0;max-width:70%}
+</style>
+</head>
+<body>
+
+<div id="auth">
+  <h2>Daftar</h2>
+  <input id="regUser" placeholder="Username">
+  <input id="regEmail" placeholder="Email" type="email">
+  <input id="regPhone" placeholder="No HP" type="tel">
+  <input id="regPass" placeholder="Password" type="password">
+  <button onclick="register()">Daftar</button>
+  
+  <h2>Login</h2>
+  <input id="loginId" placeholder="Username / Email / No HP">
+  <input id="loginPass" placeholder="Password" type="password">
+  <button onclick="login()">Login</button>
+</div>
+
+<div id="app" style="display:none">
+  <h3 id="me"></h3>
+  <div id="users"></div>
+  <div id="chat"></div>
+  <input id="msg" placeholder="Ketik pesan...">
+  <button onclick="send()">Kirim</button>
+  <button onclick="logout()">Logout</button>
+</div>
+
+<script>
+let userId, username, privateKey, receiverId;
+
+async function register(){
+  const username = regUser.value;
+  const email = regEmail.value;
+  const phone = regPhone.value;
+  const password = regPass.value;
+  const keyPair = await crypto.subtle.generateKey({name:"RSA-OAEP",modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:"SHA-256"},true,["encrypt","decrypt"]);
+  const publicKey = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("spki",keyPair.publicKey))));
+  localStorage.setItem('priv', btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8",keyPair.privateKey)))));
+  
+  const res = await fetch('/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,email,phone,password,publicKey})});
+  const data = await res.json();
+  alert(data.ok?'Daftar sukses':'Gagal: '+data.error);
+}
+
+async function login(){
+  const identifier = loginId.value;
+  const password = loginPass.value;
+  const res = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identifier,password})});
+  const data = await res.json();
+  if(data.ok){
+    userId=data.userId; username=data.username;
+    document.getElementById('auth').style.display='none';
+    document.getElementById('app').style.display='block';
+    document.getElementById('me').innerText='@'+username;
+    loadUsers();
+  } else alert(data.error);
+}
+
+async function loadUsers(){
+  const res = await fetch('/users');
+  const users = await res.json();
+  usersDiv.innerHTML = users.filter(u=>u.id!=userId).map(u=>`<div onclick="openChat(${u.id})">${u.username}</div>`).join('');
+}
+
+function openChat(id){ receiverId=id; loadMessages(); }
+
+async function loadMessages(){
+  const res = await fetch(`/messages/${userId}/${receiverId}`);
+  const msgs = await res.json();
+  chat.innerHTML = msgs.map(m=>`<div class="msg">${m.ciphertext}</div>`).join('');
+}
+
+async function send(){
+  const text = msg.value;
+  await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({senderId:userId,receiverId,ciphertext:text,iv:''})});
+  msg.value=''; loadMessages();
+}
+
+function logout(){ localStorage.clear(); location.reload(); }
+</script>
+</body>
+  </html>
