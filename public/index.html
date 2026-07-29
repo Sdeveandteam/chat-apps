@@ -36,8 +36,7 @@
   #composer{ display:flex; padding:10px; gap:8px; background:#202c33; flex-shrink:0; }
   #composer input{ flex:1; padding:12px; border-radius:20px; border:none; background:#2a3942; color:#e9edef; min-width:0; }
   #composer button{ padding:0 18px; border:none; border-radius:20px; background:#00a884; color:#fff; cursor:pointer; flex-shrink:0; }
-  #emptyChat{ margin:auto; color:#8696a0; text-align:center; }
- .loading{ margin:auto; color:#8696a0; }
+  #emptyChat,.loading{ margin:auto; color:#8696a0; text-align:center; }
 
   @media (max-width: 640px){
     #sidebar{ width:130px; }
@@ -60,9 +59,7 @@
 
 <div id="app">
   <div id="sidebar">
-    <header>
-      <strong id="meLabel"></strong>
-    </header>
+    <header><strong id="meLabel"></strong></header>
     <div id="addContact">
       <input id="contactInput" placeholder="Cari username...">
       <button id="addContactBtn">+</button>
@@ -89,65 +86,16 @@ const dec = new TextDecoder();
 function bufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
 function b64ToBuf(b64){ return Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
 
-async function generateKeyPair(){
-  return crypto.subtle.generateKey({ name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey']);
-}
-async function exportPublicKeyJWK(publicKey){
-  return JSON.stringify(await crypto.subtle.exportKey('jwk', publicKey));
-}
-async function importPublicKeyJWK(jwkStr){
-  const jwk = JSON.parse(jwkStr);
-  return crypto.subtle.importKey('jwk', jwk, { name:'ECDH', namedCurve:'P-256' }, true, []);
-}
-async function deriveSharedAesKey(myPrivateKey, theirPublicKey){
-  return crypto.subtle.deriveKey(
-    { name:'ECDH', public: theirPublicKey },
-    myPrivateKey,
-    { name:'AES-GCM', length:256 },
-    false,
-    ['encrypt','decrypt']
-  );
-}
-async function encryptText(aesKey, plaintext){
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, aesKey, enc.encode(plaintext));
-  return { ciphertext: bufToB64(ct), iv: bufToB64(iv) };
-}
-async function decryptText(aesKey, ciphertextB64, ivB64){
-  try {
-    const ct = b64ToBuf(ciphertextB64);
-    const iv = b64ToBuf(ivB64);
-    const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ct);
-    return dec.decode(pt);
-  } catch { return '[Pesan tidak bisa didekripsi]'; }
-}
+async function generateKeyPair(){ return crypto.subtle.generateKey({ name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey']); }
+async function exportPublicKeyJWK(publicKey){ return JSON.stringify(await crypto.subtle.exportKey('jwk', publicKey)); }
+async function importPublicKeyJWK(jwkStr){ const jwk = JSON.parse(jwkStr); return crypto.subtle.importKey('jwk', jwk, { name:'ECDH', namedCurve:'P-256' }, true, []); }
+async function deriveSharedAesKey(myPrivateKey, theirPublicKey){ return crypto.subtle.deriveKey({ name:'ECDH', public: theirPublicKey }, myPrivateKey, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']); }
+async function encryptText(aesKey, plaintext){ const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, aesKey, enc.encode(plaintext)); return { ciphertext: bufToB64(ct), iv: bufToB64(iv) }; }
+async function decryptText(aesKey, ciphertextB64, ivB64){ try { const ct = b64ToBuf(ciphertextB64); const iv = b64ToBuf(ivB64); const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ct); return dec.decode(pt); } catch { return '[Pesan tidak bisa didekripsi]'; } }
 
-function idbOpen(){
-  return new Promise((resolve, reject)=>{
-    const req = indexedDB.open('e2ee-store', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('keys');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function idbSet(key, value){
-  const db = await idbOpen();
-  return new Promise((resolve, reject)=>{
-    const tx = db.transaction('keys','readwrite');
-    tx.objectStore('keys').put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-async function idbGet(key){
-  const db = await idbOpen();
-  return new Promise((resolve, reject)=>{
-    const tx = db.transaction('keys','readonly');
-    const req = tx.objectStore('keys').get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+function idbOpen(){ return new Promise((resolve, reject)=>{ const req = indexedDB.open('e2ee-store', 1); req.onupgradeneeded = () => req.result.createObjectStore('keys'); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); }
+async function idbSet(key, value){ const db = await idbOpen(); return new Promise((resolve, reject)=>{ const tx = db.transaction('keys','readwrite'); tx.objectStore('keys').put(value, key); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); }
+async function idbGet(key){ const db = await idbOpen(); return new Promise((resolve, reject)=>{ const tx = db.transaction('keys','readonly'); const req = tx.objectStore('keys').get(key); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); }
 
 let token = null, me = null, myKeyPair = null, socket = null;
 let contacts = [];
@@ -161,108 +109,62 @@ const authSubmit = document.getElementById('authSubmit');
 const authTitle = document.getElementById('authTitle');
 const authSwitch = document.getElementById('authSwitch');
 
-authSwitch.addEventListener('click', ()=>{
-  isRegisterMode =!isRegisterMode;
-  authTitle.textContent = isRegisterMode? 'Daftar akun baru' : 'Masuk ke Chat E2EE';
-  authSubmit.textContent = isRegisterMode? 'Daftar' : 'Masuk';
-  authSwitch.textContent = isRegisterMode? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar';
-  authError.textContent = '';
-});
+authSwitch.addEventListener('click', ()=>{ isRegisterMode=!isRegisterMode; authTitle.textContent = isRegisterMode? 'Daftar akun baru' : 'Masuk ke Chat E2EE'; authSubmit.textContent = isRegisterMode? 'Daftar' : 'Masuk'; authSwitch.textContent = isRegisterMode? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar'; authError.textContent = ''; });
 
 authSubmit.addEventListener('click', async ()=>{
   const username = authUsername.value.trim();
   const password = authPassword.value;
   authError.textContent = '';
   if(!username ||!password){ authError.textContent = 'Isi username dan password.'; return; }
-
   try{
     if(isRegisterMode){
       myKeyPair = await generateKeyPair();
       const publicKeyJWK = await exportPublicKeyJWK(myKeyPair.publicKey);
-      const res = await fetch(`${API_BASE}/api/register`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ username, password, publicKey: publicKeyJWK })
-      });
-      const data = await res.json();
-      if(!res.ok) throw new Error(data.error || 'Gagal daftar');
+      const res = await fetch(`${API_BASE}/api/register`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, password, publicKey: publicKeyJWK }) });
+      const data = await res.json(); if(!res.ok) throw new Error(data.error || 'Gagal daftar');
       await idbSet(`privkey:${username.toLowerCase()}`, myKeyPair.privateKey);
       token = data.token; me = data.user;
     } else {
-      const res = await fetch(`${API_BASE}/api/login`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
-      if(!res.ok) throw new Error(data.error || 'Gagal login');
+      const res = await fetch(`${API_BASE}/api/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, password }) });
+      const data = await res.json(); if(!res.ok) throw new Error(data.error || 'Gagal login');
       token = data.token; me = data.user;
       const savedPriv = await idbGet(`privkey:${username.toLowerCase()}`);
-      if(!savedPriv){
-        authError.textContent = 'Kunci privat tidak ditemukan di device ini. Daftar akun baru di device ini.';
-        return;
-      }
+      if(!savedPriv){ authError.textContent = 'Kunci privat tidak ditemukan di device ini. Daftar akun baru di device ini.'; return; }
       myKeyPair = { privateKey: savedPriv };
     }
     startApp();
-  }catch(err){
-    authError.textContent = err.message;
-  }
+  }catch(err){ authError.textContent = err.message; }
 });
 
 function startApp(){
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('app').classList.add('active');
   document.getElementById('meLabel').textContent = '@' + me.username;
-
   socket = io(API_BASE || undefined, { auth: { token } });
   socket.on('receive_message', handleIncoming);
   socket.on('message_sent_ack', handleIncoming);
-
   document.getElementById('addContactBtn').addEventListener('click', addContact);
   document.getElementById('sendBtn').addEventListener('click', sendMessage);
-  document.getElementById('messageInput').addEventListener('keydown', (e)=>{
-    if(e.key === 'Enter') sendMessage();
-  });
+  document.getElementById('messageInput').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendMessage(); });
 }
 
 async function addContact(){
   const input = document.getElementById('contactInput');
   const statusEl = document.getElementById('contactStatus');
   const username = input.value.trim().toLowerCase();
-  statusEl.textContent = '';
-  statusEl.style.color = '#f15c6d';
-
+  statusEl.textContent = ''; statusEl.style.color = '#f15c6d';
   if(!username) return;
   if(username === me.username){ statusEl.textContent = 'Tidak bisa chat dengan diri sendiri.'; return; }
-
   try{
-    const res = await fetch(`${API_BASE}/api/users/${username}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const data = await res.json();
-    if(!res.ok){
-      statusEl.textContent = (data.error || 'User tidak ditemukan') + ` (status ${res.status})`;
-      return;
-    }
-
-    if(contacts.find(c => c.id === data.id)){
-      statusEl.style.color = '#8696a0';
-      statusEl.textContent = 'Kontak sudah ada di daftar.';
-      input.value='';
-      return;
-    }
-
+    const res = await fetch(`${API_BASE}/api/users/${username}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json(); if(!res.ok){ statusEl.textContent = (data.error || 'User tidak ditemukan') + ` (status ${res.status})`; return; }
+    if(contacts.find(c => c.id === data.id)){ statusEl.style.color = '#8696a0'; statusEl.textContent = 'Kontak sudah ada di daftar.'; input.value=''; return; }
     const publicKey = await importPublicKeyJWK(data.public_key);
     const aesKey = await deriveSharedAesKey(myKeyPair.privateKey, publicKey);
     const contact = { id: data.id, username: data.username, aesKey };
-    contacts.push(contact);
-    input.value = '';
-    statusEl.textContent = '';
-    renderContacts();
-    selectContact(contact);
-  }catch(err){
-    statusEl.textContent = 'Gagal menghubungi server: ' + err.message;
-    console.error('addContact error:', err);
-  }
+    contacts.push(contact); input.value = ''; statusEl.textContent = '';
+    renderContacts(); selectContact(contact);
+  }catch(err){ statusEl.textContent = 'Gagal menghubungi server: ' + err.message; console.error('addContact error:', err); }
 }
 
 function renderContacts(){
@@ -277,36 +179,28 @@ function renderContacts(){
   });
 }
 
-// INI FUNGSI YG UDAH DI FIX TOTAL
+// INI YG DIUBAH TOTAL BIAR GA CRASH
 async function selectContact(contact){
-  activeContact = contact;
-  renderContacts();
-  document.getElementById('chatHeader').style.display = 'block';
-  document.getElementById('chatHeader').textContent = '@' + contact.username;
-  document.getElementById('composer').style.display = 'flex'; // TAMPILIN DULUAN
-
-  const messagesEl = document.getElementById('messages');
-  messagesEl.innerHTML = '<div class="loading">Loading pesan...</div>';
-
   try {
-    const res = await fetch(`${API_BASE}/api/messages/${contact.id}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if(!res.ok) throw new Error('Gagal load: ' + res.status);
+    activeContact = contact;
+    renderContacts();
+    document.getElementById('chatHeader').style.display = 'block';
+    document.getElementById('chatHeader').textContent = '@' + contact.username;
+    document.getElementById('composer').style.display = 'flex'; // PAKSA MUNCUL DULUAN
 
+    const messagesEl = document.getElementById('messages');
+    messagesEl.innerHTML = '<div class="loading">Loading pesan...</div>';
+
+    const res = await fetch(`${API_BASE}/api/messages/${contact.id}`, { headers: { Authorization: `Bearer ${token}` } });
+    if(!res.ok) throw new Error('Gagal load: ' + res.status + '. Coba login ulang.');
     const rows = await res.json();
     messagesEl.innerHTML = '';
-    if(rows.length === 0){
-      messagesEl.innerHTML = '<div id="emptyChat">Belum ada pesan. Sapa duluan!</div>';
-    } else {
-      for(const row of rows){
-        const plain = await decryptText(contact.aesKey, row.ciphertext, row.iv);
-        appendBubble(plain, row.sender_id === me.id, row.created_at);
-      }
-    }
+    if(rows.length === 0){ messagesEl.innerHTML = '<div id="emptyChat">Belum ada pesan. Sapa duluan!</div>'; }
+    else { for(const row of rows){ const plain = await decryptText(contact.aesKey, row.ciphertext, row.iv); appendBubble(plain, row.sender_id === me.id, row.created_at); } }
   } catch(err) {
-    console.error(err);
-    messagesEl.innerHTML = `<div id="emptyChat" style="color:#f15c6d;">${err.message}</div>`;
+    console.error("ERROR DI SELECTCONTACT:", err);
+    document.getElementById('messages').innerHTML = `<div id="emptyChat" style="color:#f15c6d;">${err.message}</div>`;
+    document.getElementById('composer').style.display = 'flex'; // TETAP MUNCUL WALAU ERROR
   }
 }
 
@@ -321,16 +215,13 @@ function appendBubble(text, isMe, createdAt){
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-function escapeHtml(s){
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
+function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 async function sendMessage(){
   const input = document.getElementById('messageInput');
   const text = input.value.trim();
   if(!text ||!activeContact) return;
   input.value = '';
-
   const { ciphertext, iv } = await encryptText(activeContact.aesKey, text);
   socket.emit('send_message', { toUserId: activeContact.id, ciphertext, iv });
   appendBubble(text, true, Date.now());
@@ -346,4 +237,4 @@ async function handleIncoming(payload){
 }
 </script>
 </body>
- </html>
+             </html>
