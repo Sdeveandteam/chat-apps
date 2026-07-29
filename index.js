@@ -20,7 +20,7 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = header.startsWith('Bearer ')? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Token tidak ada' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
@@ -30,10 +30,9 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// ---- REGISTER ----
 app.post('/api/register', async (req, res) => {
   const { username, password, publicKey } = req.body;
-  if (!username || !password || !publicKey) {
+  if (!username ||!password ||!publicKey) {
     return res.status(400).json({ error: 'username, password, dan publicKey wajib diisi' });
   }
   if (password.length < 6) {
@@ -55,7 +54,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// ---- LOGIN ----
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   try {
@@ -72,31 +70,38 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// ---- CARI USER + AMBIL PUBLIC KEY ----
 app.get('/api/users/:username', authMiddleware, async (req, res) => {
-  const result = await pool.query(
-    'SELECT id, username, public_key FROM users WHERE username=$1',
-    [req.params.username.trim().toLowerCase()]
-  );
-  if (!result.rows[0]) return res.status(404).json({ error: 'User tidak ditemukan' });
-  res.json(result.rows[0]);
+  try {
+    const result = await pool.query(
+      'SELECT id, username, public_key FROM users WHERE username=$1',
+      [req.params.username.trim().toLowerCase()]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'User tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch(err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal cari user' });
+  }
 });
 
-// ---- HISTORY PESAN (ciphertext, didekripsi di client) ----
 app.get('/api/messages/:otherUserId', authMiddleware, async (req, res) => {
-  const me = req.user.id;
-  const other = parseInt(req.params.otherUserId, 10);
-  const result = await pool.query(
-    `SELECT id, sender_id, receiver_id, ciphertext, iv, created_at FROM messages
-     WHERE (sender_id=$1 AND receiver_id=$2) OR (sender_id=$2 AND receiver_id=$1)
-     ORDER BY created_at ASC LIMIT 200`,
-    [me, other]
-  );
-  res.json(result.rows);
+  try {
+    const me = req.user.id;
+    const other = parseInt(req.params.otherUserId, 10);
+    const result = await pool.query(
+      `SELECT id, sender_id, receiver_id, ciphertext, iv, created_at FROM messages
+       WHERE (sender_id=$1 AND receiver_id=$2) OR (sender_id=$2 AND receiver_id=$1)
+       ORDER BY created_at ASC LIMIT 200`,
+      [me, other]
+    );
+    res.json(result.rows);
+  } catch(err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal ambil pesan' });
+  }
 });
 
-// ---- SOCKET.IO REALTIME ----
-const onlineUsers = new Map(); // userId -> socketId
+const onlineUsers = new Map();
 
 io.use((socket, next) => {
   try {
