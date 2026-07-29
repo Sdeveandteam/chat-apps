@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat E2EE</title>
+<style>
+  *{box-sizing:border-box;}
+  body{ margin:0; font-family:system-ui, sans-serif; background:#111b21; color:#e9edef; height:100vh; display:flex; }
+  #authScreen{ margin:auto; background:#202c33; padding:32px; border-radius:12px; width:320px; }
+  #authScreen h1{ font-size:18px; margin-top:0; }
+  #authScreen input{ width:100%; padding:10px; margin:6px 0; border-radius:6px; border:1px solid #2a3942; background:#2a3942; color:#e9edef; }
+  #authScreen button{ width:100%; padding:10px; margin-top:10px; border:none; border-radius:6px; background:#00a884; color:#fff; font-weight:600; cursor:pointer; }
+  #authScreen .switch-link{ text-align:center; margin-top:12px; font-size:13px; color:#8696a0; cursor:pointer; }
+  #authError{ color:#f15c6d; font-size:12.5px; min-height:16px; }
+
+  #app{ display:none; width:100%; height:100%; }
+  #app.active{ display:flex; }
+  #sidebar{ width:300px; background:#111b21; border-right:1px solid #2a3942; display:flex; flex-direction:column; }
+  #sidebar header{ padding:14px; background:#202c33; display:flex; justify-content:space-between; align-items:center; }
+  #addContact{ display:flex; padding:10px; gap:6px; }
+  #addContact input{ flex:1; padding:8px; border-radius:6px; border:1px solid #2a3942; background:#2a3942; color:#e9edef; }
+  #addContact button{ padding:8px 12px; border:none; border-radius:6px; background:#00a884; color:#fff; cursor:pointer; }
+  #contactList{ flex:1; overflow-y:auto; }
+  .contact-item{ padding:12px 14px; cursor:pointer; border-bottom:1px solid #202c33; }
+  .contact-item:hover, .contact-item.active{ background:#202c33; }
+
+  #chatArea{ flex:1; display:flex; flex-direction:column; }
+  #chatHeader{ padding:14px; background:#202c33; font-weight:600; }
+  #messages{ flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; background:#0b141a; }
+  .bubble{ max-width:65%; padding:8px 12px; border-radius:8px; font-size:14px; line-height:1.4; }
+  .bubble.me{ align-self:flex-end; background:#005c4b; }
+  .bubble.them{ align-self:flex-start; background:#202c33; }
+  .bubble .time{ display:block; font-size:10px; opacity:0.6; margin-top:3px; }
+  #composer{ display:flex; padding:10px; gap:8px; background:#202c33; }
+  #composer input{ flex:1; padding:12px; border-radius:20px; border:none; background:#2a3942; color:#e9edef; }
+  #composer button{ padding:0 18px; border:none; border-radius:20px; background:#00a884; color:#fff; cursor:pointer; }
+  #emptyChat{ margin:auto; color:#8696a0; text-align:center; }
+</style>
+</head>
+<body>
+
+<div id="authScreen">
+  <h1 id="authTitle">Masuk ke Chat E2EE</h1>
+  <input id="authUsername" placeholder="Username" autocomplete="username">
+  <input id="authPassword" type="password" placeholder="Password" autocomplete="current-password">
+  <div id="authError"></div>
+  <button id="authSubmit">Masuk</button>
+  <div class="switch-link" id="authSwitch">Belum punya akun? Daftar</div>
+</div>
+
+<div id="app">
+  <div id="sidebar">
+    <header>
+      <strong id="meLabel"></strong>
+    </header>
+    <div id="addContact">
+      <input id="contactInput" placeholder="Cari username...">
+      <button id="addContactBtn">+</button>
+    </div>
+    <div id="contactList"></div>
+  </div>
+  <div id="chatArea">
+    <div id="chatHeader" style="display:none;"></div>
+    <div id="messages"><div id="emptyChat">Pilih kontak untuk mulai chat</div></div>
+    <div id="composer" style="display:none;">
+      <input id="messageInput" placeholder="Tulis pesan...">
+      <button id="sendBtn">Kirim</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// ====== GANTI INI kalau backend & frontend beda domain ======
+const API_BASE = '';
+// ==============================================================
+
+/* ---------- CRYPTO (E2EE) ---------- */
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function bufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function b64ToBuf(b64){ return Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
+
+async function generateKeyPair(){
+  return crypto.subtle.generateKey({ name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey']);
+}
+async function exportPublicKeyJWK(publicKey){
+  return JSON.stringify(await crypto.subtle.exportKey('jwk', publicKey));
+}
+async function importPublicKeyJWK(jwkStr){
+  const jwk = JSON.parse(jwkStr);
+  return crypto.subtle.importKey('jwk', jwk, { name:'ECDH', namedCurve:'P-256' }, true, []);
+}
+async function deriveSharedAesKey(myPrivateKey, theirPublicKey){
+  return crypto.subtle.deriveKey(
+    { name:'ECDH', public: theirPublicKey },
+    myPrivateKey,
+    { name:'AES-GCM', length:256 },
+    false,
+    ['encrypt','decrypt']
+  );
+}
+async function encryptText(aesKey, plaintext){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, aesKey, enc.encode(plaintext));
+  return { ciphertext: bufToB64(ct), iv: bufToB64(iv) };
+}
+async function decryptText(aesKey, ciphertextB64, ivB64){
+  const ct = b64ToBuf(ciphertextB64);
+  const iv = b64ToBuf(ivB64);
+  const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ct);
+  return dec.decode(pt);
+}
+
+/* ---------- PENYIMPANAN KUNCI PRIVAT (IndexedDB, tidak pernah ke server) ---------- */
+function idbOpen(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open('e2ee-store', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('keys');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbSet(key, value){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction('keys','readwrite');
+    tx.objectStore('keys').put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGet(key){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction('keys','readonly');
+    const req = tx.objectStore('keys').get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/* ---------- STATE ---------- */
+let token = null, me = null, myKeyPair = null, socket = null;
+let contacts = []; // { id, username, publicKey (CryptoKey), aesKey (CryptoKey) }
+let activeContact = null;
+let isRegisterMode = false;
+
+/* ---------- AUTH UI ---------- */
+const authUsername = document.getElementById('authUsername');
+const authPassword = document.getElementById('authPassword');
+const authError = document.getElementById('authError');
+const authSubmit = document.getElementById('authSubmit');
+const authTitle = document.getElementById('authTitle');
+const authSwitch = document.getElementById('authSwitch');
+
+authSwitch.addEventListener('click', ()=>{
+  isRegisterMode = !isRegisterMode;
+  authTitle.textContent = isRegisterMode ? 'Daftar akun baru' : 'Masuk ke Chat E2EE';
+  authSubmit.textContent = isRegisterMode ? 'Daftar' : 'Masuk';
+  authSwitch.textContent = isRegisterMode ? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar';
+  authError.textContent = '';
+});
+
+authSubmit.addEventListener('click', async ()=>{
+  const username = authUsername.value.trim();
+  const password = authPassword.value;
+  authError.textContent = '';
+  if(!username || !password){ authError.textContent = 'Isi username dan password.'; return; }
+
+  try{
+    if(isRegisterMode){
+      myKeyPair = await generateKeyPair();
+      const publicKeyJWK = await exportPublicKeyJWK(myKeyPair.publicKey);
+      const res = await fetch(`${API_BASE}/api/register`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username, password, publicKey: publicKeyJWK })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Gagal daftar');
+      await idbSet(`privkey:${username.toLowerCase()}`, myKeyPair.privateKey);
+      token = data.token; me = data.user;
+    } else {
+      const res = await fetch(`${API_BASE}/api/login`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || 'Gagal login');
+      token = data.token; me = data.user;
+      const savedPriv = await idbGet(`privkey:${username.toLowerCase()}`);
+      if(!savedPriv){
+        authError.textContent = 'Kunci privat tidak ditemukan di device ini — akun ini terdaftar dari device/browser lain. Untuk demo, daftar akun baru di device ini.';
+        return;
+      }
+      myKeyPair = { privateKey: savedPriv };
+    }
+    startApp();
+  }catch(err){
+    authError.textContent = err.message;
+  }
+});
+
+/* ---------- APP ---------- */
+function startApp(){
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('app').classList.add('active');
+  document.getElementById('meLabel').textContent = '@' + me.username;
+
+  socket = io(API_BASE || undefined, { auth: { token } });
+  socket.on('receive_message', handleIncoming);
+  socket.on('message_sent_ack', handleIncoming);
+
+  document.getElementById('addContactBtn').addEventListener('click', addContact);
+  document.getElementById('sendBtn').addEventListener('click', sendMessage);
+  document.getElementById('messageInput').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter') sendMessage();
+  });
+}
+
+async function addContact(){
+  const input = document.getElementById('contactInput');
+  const username = input.value.trim().toLowerCase();
+  if(!username) return;
+  if(username === me.username){ alert('Tidak bisa chat dengan diri sendiri.'); return; }
+
+  const res = await fetch(`${API_BASE}/api/users/${username}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await res.json();
+  if(!res.ok){ alert(data.error || 'User tidak ditemukan'); return; }
+
+  if(contacts.find(c => c.id === data.id)){ input.value=''; return; }
+
+  const publicKey = await importPublicKeyJWK(data.public_key);
+  const aesKey = await deriveSharedAesKey(myKeyPair.privateKey, publicKey);
+  const contact = { id: data.id, username: data.username, aesKey };
+  contacts.push(contact);
+  input.value = '';
+  renderContacts();
+  selectContact(contact);
+}
+
+function renderContacts(){
+  const list = document.getElementById('contactList');
+  list.innerHTML = '';
+  contacts.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'contact-item' + (activeContact && activeContact.id === c.id ? ' active' : '');
+    el.textContent = '@' + c.username;
+    el.addEventListener('click', () => selectContact(c));
+    list.appendChild(el);
+  });
+}
+
+async function selectContact(contact){
+  activeContact = contact;
+  renderContacts();
+  document.getElementById('chatHeader').style.display = 'block';
+  document.getElementById('chatHeader').textContent = '@' + contact.username;
+  document.getElementById('composer').style.display = 'flex';
+
+  const res = await fetch(`${API_BASE}/api/messages/${contact.id}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const rows = await res.json();
+  const messagesEl = document.getElementById('messages');
+  messagesEl.innerHTML = '';
+  for(const row of rows){
+    try{
+      const plain = await decryptText(contact.aesKey, row.ciphertext, row.iv);
+      appendBubble(plain, row.sender_id === me.id, row.created_at);
+    }catch{ /* lewati pesan yang gagal didekripsi */ }
+  }
+}
+
+function appendBubble(text, isMe, createdAt){
+  const messagesEl = document.getElementById('messages');
+  const empty = document.getElementById('emptyChat');
+  if(empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'bubble ' + (isMe ? 'me' : 'them');
+  const time = new Date(createdAt || Date.now()).toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' });
+  div.innerHTML = `${escapeHtml(text)}<span class="time">${time}</span>`;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+async function sendMessage(){
+  const input = document.getElementById('messageInput');
+  const text = input.value.trim();
+  if(!text || !activeContact) return;
+  input.value = '';
+
+  const { ciphertext, iv } = await encryptText(activeContact.aesKey, text);
+  socket.emit('send_message', { toUserId: activeContact.id, ciphertext, iv });
+  appendBubble(text, true, Date.now());
+}
+
+async function handleIncoming(payload){
+  const fromId = payload.fromUserId;
+  const contact = contacts.find(c => c.id === fromId);
+  if(!contact) return; // Demo: pesan dari kontak yang belum ditambahkan diabaikan — tambahkan dulu via pencarian username
+  if(!activeContact || activeContact.id !== fromId) return;
+  const plain = await decryptText(contact.aesKey, payload.ciphertext, payload.iv);
+  appendBubble(plain, payload.fromUserId === me.id, payload.createdAt);
+}
+</script>
+</body>
+</html>
