@@ -2,6 +2,8 @@ const express = require('express');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const path = require('path');
+const nodemailer = require('nodemailer'); // TAMBAHAN 1
+const crypto = require('crypto'); // buat generate OTP
 const app = express();
 
 app.use(express.json());
@@ -12,16 +14,30 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// CONFIG EMAIL - TAMBAHAN 2
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+// FUNGSI GENERATE OTP
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 // REGISTER
 app.post('/register', async (req,res)=>{
   try {
     const {username, email, phone, password, publicKey} = req.body;
-    if(!username ||!email ||!phone ||!password) 
+    if(!username ||!email ||!phone ||!password)
       return res.status(400).json({error:'Lengkapi semua data'});
 
     const hash = await bcrypt.hash(password,10);
     await pool.query(
-      `INSERT INTO users(username,email,phone,password_hash,public_key) 
+      `INSERT INTO users(username,email,phone,password_hash,public_key)
        VALUES($1,$2,$3,$4,$5)`,
       [username,email,phone,hash,publicKey]
     );
@@ -50,6 +66,60 @@ app.post('/login', async (req,res)=>{
   }
 });
 
+// KIRIM OTP - TAMBAHAN 3
+app.post('/send-otp', async (req,res)=>{
+  try {
+    const { email } = req.body;
+    if(!email) return res.status(400).json({error:'Email wajib diisi'});
+
+    // Cek email ada di DB ga
+    const {rows} = await pool.query(`SELECT id FROM users WHERE email=$1`, [email]);
+    if(!rows.length) return res.status(400).json({error:'Email belum terdaftar'});
+
+    const otp = generateOTP();
+    const expires = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
+
+    // Simpan OTP ke tabel otps. Bikin tabel dulu ya
+    await pool.query(
+      `INSERT INTO otps(email, otp, expires_at) VALUES($1,$2,$3)
+       ON CONFLICT (email) DO UPDATE SET otp=$2, expires_at=$3`,
+      [email, otp, expires]
+    );
+
+    const mailOptions = {
+      from: `"Chat App" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Kode OTP Chat App',
+      text: `Kode OTP kamu adalah: ${otp}. Berlaku 5 menit. Jangan kasih ke siapapun.`
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log("OTP TERKIRIM KE:", email);
+    res.json({ok:true, message:'OTP terkirim ke email'});
+
+  } catch(e) {
+    console.error("GAGAL KIRIM OTP:", e);
+    res.status(500).json({error: e.message});
+  }
+});
+
+// VERIFIKASI OTP - TAMBAHAN 4
+app.post('/verify-otp', async (req,res)=>{
+  try {
+    const { email, otp } = req.body;
+    const {rows} = await pool.query(
+      `SELECT * FROM otps WHERE email=$1 AND otp=$2 AND expires_at > NOW()`,
+      [email, otp]
+    );
+    if(!rows.length) return res.status(400).json({error:'OTP salah atau kadaluarsa'});
+
+    await pool.query(`DELETE FROM otps WHERE email=$1`, [email]); // hapus OTP setelah dipake
+    res.json({ok:true, message:'OTP benar'});
+  } catch(e) {
+    res.status(500).json({error:e.message});
+  }
+});
+
 // KIRIM PESAN
 app.post('/send', async (req,res)=>{
   const {senderId, receiverId, ciphertext, iv} = req.body;
@@ -64,7 +134,7 @@ app.post('/send', async (req,res)=>{
 app.get('/messages/:userId/:otherId', async (req,res)=>{
   const {userId, otherId} = req.params;
   const {rows} = await pool.query(
-    `SELECT * FROM messages WHERE 
+    `SELECT * FROM messages WHERE
      (sender_id=$1 AND receiver_id=$2) OR (sender_id=$2 AND receiver_id=$1)
      ORDER BY created_at ASC`,
     [userId, otherId]
